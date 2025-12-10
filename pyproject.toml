@@ -1,0 +1,16 @@
+[project]
+name = "finalmeasurements"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "folium>=0.20.0",
+    "geopandas>=1.1.1",
+    "gpxpy>=1.6.2",
+    "ipykernel>=7.1.0",
+    "matplotlib>=3.10.7",
+    "pandas>=2.3.3",
+    "scikit-learn>=1.8.0",
+    "seaborn>=0.13.2",
+]
