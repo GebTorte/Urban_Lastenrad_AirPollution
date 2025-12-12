@@ -10,6 +10,7 @@ dependencies = [
     "gpxpy>=1.6.2",
     "ipykernel>=7.1.0",
     "matplotlib>=3.10.7",
+    "nbformat>=5.10.4",
     "pandas>=2.3.3",
     "plotly>=6.5.0",
     "polars>=1.36.1",
