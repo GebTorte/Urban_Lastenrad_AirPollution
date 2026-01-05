@@ -16,6 +16,8 @@ dependencies = [
     "pandas>=2.3.3",
     "plotly>=6.5.0",
     "polars>=1.36.1",
+    "pydeck>=0.9.1",
+    "pyqt6>=6.10.1",
     "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
 ]

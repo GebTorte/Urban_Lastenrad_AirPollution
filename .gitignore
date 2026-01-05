@@ -13,3 +13,7 @@ wheels/
 
 # data
 /data/*
+
+/cache/
+
+/results/

@@ -17,6 +17,10 @@ TABLE_NAME = 'buildings'
 VIEW_LATITUDE = 49.7913
 VIEW_LONGITUDE = 9.9536
 
+# default height in m
+# maybe cacl mean for aoi
+DEFAULT_BUILDING_HEIGHT = 12
+
 # --- Database Connection ---
 # Construct the database URL
 db_url = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
@@ -43,7 +47,7 @@ try:
     df = pd.read_sql_query(sql_query, engine)
 
     # Convert WKT to GeoDataFrame
-    gdf = gpd.GeoDataFrame(df, geometry=gpd.read_wkt(df['geom_wkt']), crs="EPSG:4326")
+    gdf = gpd.GeoDataFrame(df, geometry=gpd.GeoSeries.from_wkt(df['geom_wkt']), crs="EPSG:4326")
 
     print(f"Retrieved {len(gdf)} buildings.")
 
@@ -52,7 +56,7 @@ except Exception as e:
     exit()
 
 # Ensure height is numeric and handle potential issues
-gdf['height'] = pd.to_numeric(gdf['height'], errors='coerce').fillna(12)
+gdf['height'] = pd.to_numeric(gdf['height'], errors='coerce').fillna(DEFAULT_BUILDING_HEIGHT)
 
 # Prepare data for Pydeck (needs a standard DataFrame with latitude and longitude columns)
 # Extract centroids for positioning the 3D columns/buildings if needed, or use the polygon layer directly
