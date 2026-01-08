@@ -433,7 +433,7 @@ def calculate_svf_easy_raycasting(
                     intersection_points = []
                 
                 # probably redundant, just find nearest point and get max elev for that one
-                for i, int_point in enumerate(intersection_points):
+                for int_point in intersection_points:
                     dx = int_point.x - point.x
                     dy = int_point.y - point.y
                     horizontal_distance = np.sqrt(dx**2 + dy**2)
@@ -454,7 +454,6 @@ def calculate_svf_easy_raycasting(
     # based on that arctan returns values from [0, pi]
     # get the porporional of max_elevation_angle to pi
     # at 0° -> 100% weight, at 90° -> 0% weight ??
-    
     weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
     weighted_max_elev_angles = [a for a in max_elevation_angles]
 

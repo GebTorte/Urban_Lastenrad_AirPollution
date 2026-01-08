@@ -41,7 +41,7 @@ warnings.filterwarnings("ignore")
 
 
 def load_particle_measurements(
-    data_dir="./data/standardized_withNA/", sensor_position="particleFront"
+    data_dir="./data/standardized_withNA/", sensor_position="particleFront", epsg=4326
 ):
     """
     Load all particle measurement data and stack them.
@@ -59,7 +59,7 @@ def load_particle_measurements(
         if gpkg_file.endswith(".gpkg"):
             try:
                 df = gpd.read_file(os.path.join(data_dir, gpkg_file))
-                df = df.to_crs(epsg=4326)
+                df = df.to_crs(epsg=epsg)
 
                 # Filter for specific sensor position only
                 particle_cols = [
@@ -85,7 +85,7 @@ def load_particle_measurements(
         raise ValueError(f"No files found in {data_dir}")
 
 
-def load_buildings(buildings_path="./data/osm/wue_buildings_and_landuse.gpkg"):
+def load_buildings(buildings_path="./data/osm/wue_buildings_and_landuse.gpkg", epsg=4326):
     """
     Load building data with height information.
 
@@ -93,7 +93,7 @@ def load_buildings(buildings_path="./data/osm/wue_buildings_and_landuse.gpkg"):
         GeoDataFrame with buildings, including calculated heights
     """
     buildings = gpd.read_file(buildings_path)
-    buildings = buildings.to_crs(epsg=4326)
+    buildings = buildings.to_crs(epsg=epsg)
 
     # Filter for building geometries only
     if "building" in buildings.columns:
@@ -155,7 +155,7 @@ def create_2d_dem_raster_from_3d_buildings(gdf):
 
 
 
-def extract_aggregated_particle_size_bins(gdf):
+def extract_aggregated_particle_size_bins(gdf:gpd.GeoDataFrame):
     """
     Extract and aggregate particle measurements into size categories.
 
@@ -227,7 +227,7 @@ def map_measurements_to_buildings(
 
     for i, (dist, idx_list) in enumerate(zip(distances, indices)):
         valid_buildings = buildings_gdf.iloc[
-            idx_list[dist <= max_distance / 111000]
+            idx_list[dist <= max_distance]
         ]  # convert m to degrees
 
         if len(valid_buildings) > 0:
@@ -236,8 +236,8 @@ def map_measurements_to_buildings(
             measurements_gdf.loc[i, "nearest_building_distance"] = (
                 dist[0] * 111000
             )  # convert to meters
-            measurements_gdf.loc[i, "mean_5nn_building_height"] = np.nanmean(heights)
-            measurements_gdf.loc[i, "max_5nn_building_height"] = np.nanmax(heights)
+            measurements_gdf.loc[i, f"mean_{k}nn_building_height"] = np.nanmean(heights)
+            measurements_gdf.loc[i, f"max_{k}nn_building_height"] = np.nanmax(heights)
 
     return measurements_gdf
 
@@ -267,13 +267,12 @@ def calculate_urban_morphology_indices(
 
         if len(buildings_in_buffer) > 0:
             # Building density: count per 100m radius
-            measurements_gdf.loc[idx, "building_density"] = len(buildings_in_buffer) / (
-                (buffer_radius**2) / 10000
-            )
 
             # Building surface fraction: total building area / buffer area
             building_area = buildings_in_buffer.geometry.area.sum()
-            buffer_area = np.pi * (buffer_radius / 111000) ** 2
+            #buffer_area = np.pi * (buffer_radius / 111000) ** 2            
+            buffer_area = np.pi * buffer_radius ** 2
+
             measurements_gdf.loc[idx, "building_surface_fraction"] = (
                 building_area / buffer_area
             )
@@ -282,6 +281,8 @@ def calculate_urban_morphology_indices(
             measurements_gdf.loc[idx, "sky_view_factor"] = 1 - (
                 building_area / buffer_area
             )
+
+            measurements_gdf.loc[idx, "mean_building_height_in_buffer"] = np.mean(buildings_in_buffer["height_calc"])
 
             # sky view factor dem based
             # TODO: get neareast point that exists in raster
@@ -649,11 +650,12 @@ def perform_correlation_analysis(measurements_gdf, output_dir="./results/"):
         if "particles_" in col or "ufp" in col or "pm25" in col
     ]
     building_cols = [
-        "nearest_building_height",
-        "mean_5nn_building_height",
-        "max_5nn_building_height",
-        "building_density",
-        "sky_view_factor",
+        #"nearest_building_height",
+        #"mean_5nn_building_height",
+        #"max_5nn_building_height",
+        #"building_density",
+        #"sky_view_factor",
+        "svf_ray",
     ]
 
     # Remove rows with NaN in key columns
@@ -740,6 +742,9 @@ def create_pollution_heatmap(
     import folium
     from folium import plugins
 
+    # go to lat lon for foloium
+    measurements_gdf = measurements_gdf.copy().to_crs(epsg=4326)
+
     # Prepare data for heatmap
     valid_data = measurements_gdf[measurements_gdf[pollutant_col].notna()]
 
@@ -781,10 +786,10 @@ def create_pollution_heatmap(
             location=[row.geometry.y, row.geometry.x],
             radius=4,
             popup=f"""Particles ufp: {row[pollutant_col]:.1f}
-Particles : {row[""]:}
-
-Mean Building height 5nn {row["mean_5nn_building_height"]:1f}
-Building density: {row["building_density"]:1f}
+Particles pm25 equivalent : {row["pm25_equiv"]:.1f}
+sky_view factor: {row["svf_ray"]:.2f}
+Mean Building height 5nn {row["mean_10nn_building_height"]:1f}
+density: {row["building_density"]:1f}
 """,
             color=color,
             fill=True,
@@ -1055,14 +1060,12 @@ def generate_analysis_report(measurements_gdf: gpd.GeoDataFrame, buildings_gdf: 
     measurements_gdf = calculate_urban_morphology_indices(
         measurements_gdf, buildings_gdf, 
     )
-
-
     print(f"Saving temp measurements gdf to {output_dir}")
     measurements_gdf.to_file(
         os.path.join(output_dir, "measurements_with_building_features_temp.gpkg")
     )
 
-    exit("Exiting early")
+    #exit("Exiting early")
 
     # Step 4: Statistical analysis
     print("[4/6] Performing correlation analysis...")
@@ -1123,23 +1126,12 @@ def generate_analysis_report(measurements_gdf: gpd.GeoDataFrame, buildings_gdf: 
 # ============================================================================
 
 if __name__ == "__main__":
-    # Load data
-    measurements = load_particle_measurements(sensor_position="particleFront")
-    buildings = load_buildings()
     utm_epsg = 32632
+    # Load data
+    measurements = load_particle_measurements(sensor_position="particleFront", epsg=utm_epsg)
+    buildings = load_buildings( epsg=utm_epsg)
 
-    # **ADD THIS: Reproject to UTM if in lat/lon**
-    if buildings.crs.to_string().startswith('EPSG:43'):  # lat/lon
-        print(f"Converting buildings to epsg {utm_epsg}")
-
-        # For Würzburg, use UTM zone 32N
-        buildings = buildings.to_crs(epsg=utm_epsg)
-        #point = gpd.GeoSeries([point], crs='EPSG:4326').to_crs(epsg=32632)[0]
-    if measurements.crs.to_string().startswith('EPSG:43'):  # lat/lon
-        # For Würzburg, use UTM zone 32N
-        print(f"Converting measurements to epsg {utm_epsg}")
-        measurements = measurements.to_crs(epsg=utm_epsg)
-        #point = gpd.GeoSeries([point], crs='EPSG:4326').to_crs(epsg=32632)[0]
-    
     # Run analysis
     analyzed_data, buildings_data = generate_analysis_report(measurements, buildings)
+
+    
