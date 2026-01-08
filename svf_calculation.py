@@ -313,14 +313,13 @@ def calculate_svf_easy_raycasting(
     point: Union[Tuple[float, float], Point],
     building_gdf: gpd.GeoDataFrame,
     observer_height: float = 0,
-    num_rings: int = 36,
     max_distance: float = 100.0,
     azimuth_divisions: int = 360,
 ) -> float:
     """
     Calculate Sky View Factor (SVF) for a given point based on building geometries and heights.
 
-    This function implements Formula 7 from the paper, which calculates SVF as:
+    This function implements a variation of Formula 7 from the paper, which calculates SVF as:
     SVF_PA = (1 / (2π sin(π/2n))) * Σ sin((2i-1)π/2n) * α_i
 
     Parameters
@@ -332,9 +331,6 @@ def calculate_svf_easy_raycasting(
         Heights should be positive numeric values
     observer_height : float, default=1.7
         Height of observer above ground level (in meters)
-    num_rings : int, default=36
-        Number of radial divisions for SVF calculation. Higher values = more accuracy
-        but slower computation. Default 36 corresponds to 10° divisions
     max_distance : float, default=500.0
         Maximum distance to consider buildings (in meters). Buildings beyond this
         distance are ignored
@@ -368,6 +364,10 @@ def calculate_svf_easy_raycasting(
     # Convert point to Point object if tuple
     if isinstance(point, tuple):
         point = Point(point)
+
+    # in building
+    if len(building_gdf[building_gdf.geometry.distance(point) == 0]):
+        return 0.0
 
     # Filter buildings within max_distance
     buildings_filtered = building_gdf[
@@ -412,13 +412,6 @@ def calculate_svf_easy_raycasting(
 
             building_coords = list(building_geom.exterior.coords[:-1])
             
-            # Cast ray from point in azimuth direction to find intersection with building
-            ray_line = building_geom.buffer(0).boundary
-            ray_origin = point.buffer(max_distance).exterior
-            ray_direction = Point(point.x + max_distance * np.cos(azimuth), 
-                                  point.y + max_distance * np.sin(azimuth))
-            #ray = point.buffer(max_distance)
-            
 
 
             # Find intersection points
@@ -439,9 +432,9 @@ def calculate_svf_easy_raycasting(
                     dy = int_point.y - point.y
                     horizontal_distance = np.sqrt(dx**2 + dy**2)
                     
-                    if horizontal_distance < 0.1:
-                        max_elev_for_azimuth = np.pi / 2
-                        break
+                    #if horizontal_distance < 0.1:
+                    #    max_elev_for_azimuth = np.pi / 2
+                    #    break
                     
                     height_above_observer = building_height - observer_height
                     elevation_angle = np.arctan(height_above_observer / horizontal_distance)
@@ -514,7 +507,6 @@ def calculate_svf_batch(
             point,
             building_gdf,
             observer_height=observer_height,
-            num_rings=num_rings,
             max_distance=max_distance,
             azimuth_divisions=azimuth_divisions,
         )
