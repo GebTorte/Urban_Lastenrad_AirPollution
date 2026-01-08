@@ -372,7 +372,10 @@ def calculate_svf_easy_raycasting(
     # Filter buildings within max_distance
     buildings_filtered = building_gdf[
         building_gdf.geometry.distance(point) <= max_distance
-    ].copy()
+    ] # .copy()
+    #print(f"# Relevant buildings: {len(buildings_filtered)}" )
+    #print(buildings_filtered.geometry.distance(point).min())  # Minimum distance
+    #print(buildings_filtered.geometry.distance(point).max())  # Maximum distance
 
     if len(buildings_filtered) == 0:
         # No buildings nearby, completely open sky
@@ -402,6 +405,11 @@ def calculate_svf_easy_raycasting(
         azimuth_idx = int(np.round(azimuth / azimuth_step)) % azimuth_divisions
 
         for building_idx, (_, building) in enumerate(buildings_filtered.iterrows()):
+            #print(f"Progress on {building_idx}/{len(buildings_filtered)} buildings", end="\r")
+
+            intersection = building.geometry.intersection(ray)
+            if intersection.is_empty: 
+                continue
             building_geom = building.geometry
             building_height = building["height_calc"]
 
@@ -425,7 +433,7 @@ def calculate_svf_easy_raycasting(
                     intersection_points = []
                 
                 # probably redundant, just find nearest point and get max elev for that one
-                for int_point in intersection_points:
+                for i, int_point in enumerate(intersection_points):
                     dx = int_point.x - point.x
                     dy = int_point.y - point.y
                     horizontal_distance = np.sqrt(dx**2 + dy**2)
@@ -446,15 +454,9 @@ def calculate_svf_easy_raycasting(
     # based on that arctan returns values from [0, pi]
     # get the porporional of max_elevation_angle to pi
     # at 0° -> 100% weight, at 90° -> 0% weight ??
-    print("max elev angles:", max_elevation_angles)
+    
     weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
     weighted_max_elev_angles = [a for a in max_elevation_angles]
-
-    
-    # cos as weight
-    # weighted_max_elev_angles = [cos(a) * a for a in max_elevation_angles]
-
-    print("weighted: ", weighted_max_elev_angles)
 
     full_view = (np.pi/2 * azimuth_divisions)
     svf_easy = 1 - (sum(weighted_max_elev_angles) / full_view)

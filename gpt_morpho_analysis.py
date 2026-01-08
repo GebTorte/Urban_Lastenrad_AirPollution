@@ -31,6 +31,8 @@ from scipy.spatial import KDTree
 from scipy.interpolate import griddata
 import warnings
 
+from svf_calculation import calculate_svf_easy_raycasting
+
 warnings.filterwarnings("ignore")
 
 # ============================================================================
@@ -241,7 +243,7 @@ def map_measurements_to_buildings(
 
 
 def calculate_urban_morphology_indices(
-    measurements_gdf, buildings_gdf, svf_raster, buffer_radius=100
+    measurements_gdf, buildings_gdf, svf_raster=None, buffer_radius=100
 ):
     """
     Calculate urban morphology indices (SVF, aspect ratio, building density).
@@ -255,11 +257,10 @@ def calculate_urban_morphology_indices(
     # TODO:
     measurements_gdf["mean_building_height_in_buffer"] = np.nan
 
-
-
     for idx, point in measurements_gdf.iterrows():
+        print(f"Progess on calculating urban morpohogy indices {idx}/{len(measurements_gdf)}", end="\r")
         # Create circular buffer around measurement point
-        buffer = point.geometry.buffer(buffer_radius / 111000)  # convert m to degrees
+        buffer = point.geometry.buffer(buffer_radius) #buffer_radius / 111000)  # convert m to degrees
 
         # Buildings within buffer
         buildings_in_buffer = buildings_gdf[buildings_gdf.geometry.intersects(buffer)]
@@ -284,7 +285,16 @@ def calculate_urban_morphology_indices(
 
             # sky view factor dem based
             # TODO: get neareast point that exists in raster
-            measurements_gdf.loc[idx, "sky_view_factor_dem"] = svf_raster[point.x, point.y] # TODO: get points svf from svf arr
+            #if svf_raster:
+                #measurements_gdf.loc[idx, "sky_view_factor_dem"] = svf_raster[point.x, point.y] # TODO: get points svf from svf arr
+
+            # sky view factor raytracing based
+            measurements_gdf.loc[idx, "svf_ray"] = calculate_svf_easy_raycasting(
+                point.geometry, 
+                buildings_gdf, 
+                max_distance=30, 
+                azimuth_divisions=90
+            )
 
     return measurements_gdf
 
@@ -609,15 +619,15 @@ def calculate_urban_morphology_indices_physics_based(
     return measurements_gdf
 
 
-def calculate_urban_morphology_indices(
-    measurements_gdf, buildings_gdf, buffer_radius=100
-):
-    """
-    Wrapper for backward compatibility - calls physics-based version.
-    """
-    return calculate_urban_morphology_indices_physics_based(
-        measurements_gdf, buildings_gdf, buffer_radius, use_physics_svf=True
-    )
+#def calculate_urban_morphology_indices(
+#    measurements_gdf, buildings_gdf, buffer_radius=100
+#):
+#    """
+#    Wrapper for backward compatibility - calls physics-based version.
+#    """
+#    return calculate_urban_morphology_indices_physics_based(
+#        measurements_gdf, buildings_gdf, buffer_radius, use_physics_svf=True
+#    )
 
 # ============================================================================
 # PART 3: STATISTICAL ANALYSIS
@@ -1005,7 +1015,7 @@ def analyze_street_canyons(measurements_gdf, buildings_gdf, output_dir="./result
 # ============================================================================
 
 
-def generate_analysis_report(measurements_gdf, buildings_gdf, output_dir="./results/"):
+def generate_analysis_report(measurements_gdf: gpd.GeoDataFrame, buildings_gdf: gpd.GeoDataFrame, output_dir="./results/"):
     """
     Run complete analysis pipeline and generate report.
     """
@@ -1024,27 +1034,35 @@ def generate_analysis_report(measurements_gdf, buildings_gdf, output_dir="./resu
     print("[2/6] Matching measurements to building data...")
     measurements_gdf = map_measurements_to_buildings(measurements_gdf, buildings_gdf)
 
-    print("[3.0/6] Preparing SVF for raster")
-    import rvt
-    import rvt.vis
+    #print("[3.0/6] Preparing SVF for raster"
+    #import rvt
+    #import rvt.vis
     # prepare rasterized "DEM"
-    dem = create_2d_dem_raster_from_3d_buildings(buildings_gdf)
-    out_dict= rvt.vis.sky_view_factor(
-                dem,
-                resolution=RASTER_RES,
-                compute_svf=True,
-                svf_r_max=10,
-                svf_n_dir = 16,
-            )
-    svf_arr = out_dict["svf"]
+    #dem = create_2d_dem_raster_from_3d_buildings(buildings_gdf)
+    #out_dict= rvt.vis.sky_view_factor(
+    #            dem,
+    #            resolution=RASTER_RES,
+    #            compute_svf=True,
+    #            svf_r_max=10,
+    #            svf_n_dir = 16,
+    #        )
+    #svf_arr = out_dict["svf"]
 
 
 
     # Step 3: Urban morphology
     print("[3.1/6] Calculating urban morphology indices...")
     measurements_gdf = calculate_urban_morphology_indices(
-        measurements_gdf, buildings_gdf, svf_raster=svf_arr
+        measurements_gdf, buildings_gdf, 
     )
+
+
+    print(f"Saving temp measurements gdf to {output_dir}")
+    measurements_gdf.to_file(
+        os.path.join(output_dir, "measurements_with_building_features_temp.gpkg")
+    )
+
+    exit("Exiting early")
 
     # Step 4: Statistical analysis
     print("[4/6] Performing correlation analysis...")
@@ -1108,6 +1126,20 @@ if __name__ == "__main__":
     # Load data
     measurements = load_particle_measurements(sensor_position="particleFront")
     buildings = load_buildings()
+    utm_epsg = 32632
 
+    # **ADD THIS: Reproject to UTM if in lat/lon**
+    if buildings.crs.to_string().startswith('EPSG:43'):  # lat/lon
+        print(f"Converting buildings to epsg {utm_epsg}")
+
+        # For Würzburg, use UTM zone 32N
+        buildings = buildings.to_crs(epsg=utm_epsg)
+        #point = gpd.GeoSeries([point], crs='EPSG:4326').to_crs(epsg=32632)[0]
+    if measurements.crs.to_string().startswith('EPSG:43'):  # lat/lon
+        # For Würzburg, use UTM zone 32N
+        print(f"Converting measurements to epsg {utm_epsg}")
+        measurements = measurements.to_crs(epsg=utm_epsg)
+        #point = gpd.GeoSeries([point], crs='EPSG:4326').to_crs(epsg=32632)[0]
+    
     # Run analysis
     analyzed_data, buildings_data = generate_analysis_report(measurements, buildings)
