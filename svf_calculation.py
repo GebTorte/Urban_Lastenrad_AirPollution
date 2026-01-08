@@ -411,8 +411,6 @@ def calculate_svf_easy_raycasting(
             # TODO implement for multipolygons
 
             building_coords = list(building_geom.exterior.coords[:-1])
-            
-
 
             # Find intersection points
             intersection = building_geom.intersection(ray)
@@ -459,7 +457,7 @@ def calculate_svf_easy_raycasting(
     print("weighted: ", weighted_max_elev_angles)
 
     full_view = (np.pi/2 * azimuth_divisions)
-    svf_easy = (full_view - sum(weighted_max_elev_angles)) / full_view
+    svf_easy = 1 - (sum(weighted_max_elev_angles) / full_view)
     return svf_easy
 
 
