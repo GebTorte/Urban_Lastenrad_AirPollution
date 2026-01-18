@@ -300,7 +300,7 @@ def calculate_svf_easy(
     # at 0° -> 100% weight, at 90° -> 0% weight
     print("max elev angles:", max_elevation_angles)
     # cos as weight
-    weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
+    weighted_max_elev_angles = [a for a in max_elevation_angles]
     # weighted_max_elev_angles = [a for a in max_elevation_angles]
 
     print("weighted: ", weighted_max_elev_angles)
@@ -312,7 +312,7 @@ def calculate_svf_easy(
 def calculate_svf_easy_raycasting(
     point: Union[Tuple[float, float], Point],
     building_gdf: gpd.GeoDataFrame,
-    observer_height: float = 0,
+    observer_height: float = 0.,
     max_distance: float = 100.0,
     azimuth_divisions: int = 360,
 ) -> float:
@@ -367,7 +367,7 @@ def calculate_svf_easy_raycasting(
 
     # in building
     if len(building_gdf[building_gdf.geometry.distance(point) == 0]):
-        return 0.0
+        return np.nan
 
     # Filter buildings within max_distance
     buildings_filtered = building_gdf[
@@ -443,22 +443,23 @@ def calculate_svf_easy_raycasting(
                     #    break
                     
                     height_above_observer = building_height - observer_height
-                    elevation_angle = np.arctan(height_above_observer / horizontal_distance)
-                    max_elev_for_azimuth = max(max_elev_for_azimuth, elevation_angle, 0)
+                    # tan⁻1 (opposite - adjacent side) -> alpha
+                    alpha = np.arctan(height_above_observer / horizontal_distance)
+                    max_elev_for_azimuth = max(max_elev_for_azimuth, alpha, 0)
             
         azimuth_idx = int(np.round(azimuth / azimuth_step)) % azimuth_divisions
         max_elevation_angles[azimuth_idx] = max_elev_for_azimuth
 
     # NEW
     # calculate svf for each azimuth division
-    # based on that arctan returns values from [0, pi]
+    # based on that arctan returns values from [0, pi] for angles [0, 90]
     # get the porporional of max_elevation_angle to pi
     # at 0° -> 100% weight, at 90° -> 0% weight ??
-    weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
-    weighted_max_elev_angles = [a for a in max_elevation_angles]
+    #weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
+    #weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
 
-    full_view = (np.pi/2 * azimuth_divisions)
-    svf_easy = 1 - (sum(weighted_max_elev_angles) / full_view)
+    full_view = (.5*np.pi * azimuth_divisions)
+    svf_easy = 1 - (sum(max_elevation_angles) / full_view)
     return svf_easy
 
 
