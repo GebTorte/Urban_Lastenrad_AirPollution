@@ -312,6 +312,7 @@ def calculate_svf_easy(
 def calculate_svf_easy_raycasting(
     point: Union[Tuple[float, float], Point],
     building_gdf: gpd.GeoDataFrame,
+    building_height_column:str = "height_calc",
     observer_height: float = 0.,
     max_distance: float = 100.0,
     azimuth_divisions: int = 360,
@@ -321,6 +322,9 @@ def calculate_svf_easy_raycasting(
 
     This function implements a variation of Formula 7 from the paper, which calculates SVF as:
     SVF_PA = (1 / (2π sin(π/2n))) * Σ sin((2i-1)π/2n) * α_i
+
+    Note: as the centroid of the building is taken, and not the point where the ray meets the buildings top edge,
+     there is bound to be a error in the angle alpha.
 
     Parameters
     ----------
@@ -356,7 +360,7 @@ def calculate_svf_easy_raycasting(
 
     Notes
     -----
-    - The building_gdf must have a 'height' column with positive numeric values
+    - The building_gdf must have a 'height_calc' column with positive numeric values
     - Point coordinates and building coordinates must be in the same CRS
     - For best results, use projected coordinate systems (e.g., UTM) rather than lat/lon
     - Computation time increases with number of buildings and num_rings
@@ -365,7 +369,7 @@ def calculate_svf_easy_raycasting(
     if isinstance(point, tuple):
         point = Point(point)
 
-    # in building
+    # case: in building
     if len(building_gdf[building_gdf.geometry.distance(point) == 0]):
         return np.nan
 
@@ -399,11 +403,9 @@ def calculate_svf_easy_raycasting(
                                   point.y + max_distance * np.sin(azimuth))
         
         ray = LineString([point, ray_end])
-
+                    
         # For all buildings intersected by the ray in this azimuth direction,
         # calculate the maximum elevation angle and update the result
-        azimuth_idx = int(np.round(azimuth / azimuth_step)) % azimuth_divisions
-
         for building_idx, (_, building) in enumerate(buildings_filtered.iterrows()):
             #print(f"Progress on {building_idx}/{len(buildings_filtered)} buildings", end="\r")
 
@@ -411,11 +413,10 @@ def calculate_svf_easy_raycasting(
             if intersection.is_empty: 
                 continue
             building_geom = building.geometry
-            building_height = building["height_calc"]
+            building_height = building[building_height_column]
 
             if not isinstance(building_geom, Polygon):
                 continue
-
             # TODO implement for multipolygons
 
             building_coords = list(building_geom.exterior.coords[:-1])
@@ -432,7 +433,7 @@ def calculate_svf_easy_raycasting(
                 else:
                     intersection_points = []
                 
-                # probably redundant, just find nearest point and get max elev for that one
+                # get nearest point of intersection for angle calculation (not perfect method)
                 for int_point in intersection_points:
                     dx = int_point.x - point.x
                     dy = int_point.y - point.y
@@ -443,10 +444,11 @@ def calculate_svf_easy_raycasting(
                     #    break
                     
                     height_above_observer = building_height - observer_height
-                    # tan⁻1 (opposite - adjacent side) -> alpha
+                    # tan^-1 (opposite - adjacent side) -> alpha
                     alpha = np.arctan(height_above_observer / horizontal_distance)
                     max_elev_for_azimuth = max(max_elev_for_azimuth, alpha, 0)
-            
+
+        # place angle for nearest azimuth
         azimuth_idx = int(np.round(azimuth / azimuth_step)) % azimuth_divisions
         max_elevation_angles[azimuth_idx] = max_elev_for_azimuth
 
@@ -455,7 +457,6 @@ def calculate_svf_easy_raycasting(
     # based on that arctan returns values from [0, pi] for angles [0, 90]
     # get the porporional of max_elevation_angle to pi
     # at 0° -> 100% weight, at 90° -> 0% weight ??
-    #weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
     #weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
 
     full_view = (.5*np.pi * azimuth_divisions)
@@ -467,7 +468,6 @@ def calculate_svf_batch(
     points: list,
     building_gdf: gpd.GeoDataFrame,
     observer_height: float = 1.7,
-    num_rings: int = 36,
     max_distance: float = 500.0,
     azimuth_divisions: int = 360,
     verbose: bool = False,
@@ -483,8 +483,6 @@ def calculate_svf_batch(
         GeoDataFrame containing building data
     observer_height : float
         Height of observer (default 1.7 m)
-    num_rings : int
-        Number of radial divisions (default 36)
     max_distance : float
         Maximum distance to consider buildings (default 500 m)
     azimuth_divisions : int
@@ -520,11 +518,10 @@ if __name__ == "__main__":
     print("SVF Calculation Module")
     print("=" * 50)
     print(
-        "This module calculates Sky View Factor using the method from:\n"
-        "Xu et al. (2024) - Online Street View-Based Approach for SVF Estimation"
+        "This module calculates Sky View Factor using a solid angle, geo-ray-tracing-like method"
     )
     print(
         "\nUsage:\n"
-        "  from svf_calculation import calculate_svf\n"
-        "  svf = calculate_svf(point, buildings_gdf)\n"
+        "  from svf_calculation import calculate_svf_easy_raycasting\n"
+        "  svf = calculate_svf_easy_raycasting(point, buildings_gdf)\n"
     )
