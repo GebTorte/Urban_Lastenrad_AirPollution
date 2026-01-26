@@ -392,6 +392,8 @@ def calculate_svf_easy_raycasting(
     # Initialize array to store maximum elevation angles for each azimuth
     max_elevation_angles = np.zeros(azimuth_divisions)
 
+    angles = []
+
     # Calculate maximum elevation angle for each azimuth direction
 
     for azimuth in azimuths:
@@ -447,10 +449,12 @@ def calculate_svf_easy_raycasting(
                     # tan^-1 (opposite - adjacent side) -> alpha
                     alpha = np.arctan(height_above_observer / horizontal_distance)
                     max_elev_for_azimuth = max(max_elev_for_azimuth, alpha, 0)
+                
+        angles.append(max_elev_for_azimuth)
 
         # place angle for nearest azimuth
-        azimuth_idx = int(np.round(azimuth / azimuth_step)) % azimuth_divisions
-        max_elevation_angles[azimuth_idx] = max_elev_for_azimuth
+        #azimuth_idx = int(np.round(azimuth / azimuth_step)) % azimuth_divisions
+        #max_elevation_angles[azimuth_idx] = max_elev_for_azimuth
 
     # NEW
     # calculate svf for each azimuth division
@@ -460,7 +464,9 @@ def calculate_svf_easy_raycasting(
     #weighted_max_elev_angles = [np.cos(a) * a for a in max_elevation_angles]
 
     full_view = (.5*np.pi * azimuth_divisions)
-    svf_easy = 1 - (sum(max_elevation_angles) / full_view)
+    #svf_easy = 1 - (sum(max_elevation_angles) / full_view)
+    svf_easy = 1 - (sum(angles) / full_view)
+
     return svf_easy
 
 

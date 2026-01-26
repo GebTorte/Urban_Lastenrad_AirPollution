@@ -1,6 +1,3 @@
-# I'll create a comprehensive Python analysis script/notebook that you can use
-# This will be presented as code to insert into your notebook system
-
 """
 AIR POLLUTION & BUILDING HEIGHT CORRELATION ANALYSIS
 =====================================================
@@ -14,13 +11,14 @@ LITERATURE-BASED APPROACH:
 5. Methodology: Map particle measurements to nearest buildings, correlate with height
 
 ANALYSIS OBJECTIVES:
-- Correlate particle density (0.1L-1.0L diameter) with building heights
+- Correlate particle density (0.1um-10um diameter) with building heights
 - Identify street canyon hotspots (high height/width ratio)
 - Create spatial heatmaps of pollution distribution
 - Statistical validation (R², Pearson correlation, Mann-Whitney tests)
 """
 
 import os
+from folium import PolyLine
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -30,10 +28,18 @@ from scipy import stats
 from scipy.spatial import KDTree
 from scipy.interpolate import griddata
 import warnings
+import logging
+import sys
 
 from svf_calculation import calculate_svf_easy_raycasting
 
 warnings.filterwarnings("ignore")
+
+# create logger
+logger = logging.Logger("scriptlogger", level=0)
+
+stream_handler = logging.StreamHandler(sys.stdout)
+logger.addHandler(stream_handler)
 
 # ============================================================================
 # PART 1: DATA LOADING AND PREPARATION
@@ -41,7 +47,10 @@ warnings.filterwarnings("ignore")
 
 
 def load_particle_measurements(
-    data_dir="./data/standardized_withNA/", sensor_position="particleBack", epsg=4326
+    data_dir="./data/standardized_withNA/",
+    sensor_position="particleBack",
+    time_of_day: list[str] = ["Vormittag", "Mittag", "Nachmitag", "Abend"],
+    epsg=4326,
 ):
     """
     Load all particle measurement data and stack them.
@@ -58,6 +67,10 @@ def load_particle_measurements(
     for gpkg_file in os.listdir(data_dir):
         if gpkg_file.endswith(".gpkg"):
             try:
+                # filter for TOD
+                if not any(tod_str in gpkg_file for tod_str in time_of_day):
+                    continue
+
                 df = gpd.read_file(os.path.join(data_dir, gpkg_file))
                 df = df.to_crs(epsg=epsg)
 
@@ -67,15 +80,16 @@ def load_particle_measurements(
                     for col in df.columns
                     if sensor_position in col and "Particles" in col
                 ]
+
                 keep_cols = ["geometry", "distance_from_start_km"] + particle_cols
                 keep_cols = [c for c in keep_cols if c in df.columns]
 
                 df_filtered = df[keep_cols]
                 df_filtered["measurement_source"] = gpkg_file
                 df_list.append(df_filtered)
-                print(f"✓ Loaded {gpkg_file}")
+                logger.log(level=1, msg=f"✓ Loaded {gpkg_file}")
             except Exception as e:
-                print(f"✗ Error loading {gpkg_file}: {e}")
+                logger.log(level=1, msg=f"✗ Error loading {gpkg_file}: {e}")
 
     if df_list:
         combined_gdf = pd.concat(df_list, ignore_index=True)
@@ -130,7 +144,7 @@ def load_buildings(
     # buildings["height_calc"] = pd.to_numeric(buildings["height_calc"], errors="coerce")
     buildings["height_calc"] = buildings["height_calc"]  # .clip(lower=3, upper=150)
 
-    print(f"✓ Loaded {len(buildings)} buildings")
+    logger.log(level=1, msg=f"✓ Loaded {len(buildings)} buildings")
     return buildings
 
 
@@ -149,7 +163,7 @@ def load_GBA_buildings(buildings_path="./data/gba_wue.geojson", epsg: int = 4326
     # rename height column
     buildings.rename(columns={"height": "height_calc"}, inplace=True)
 
-    print(f"✓ Loaded {len(buildings)} GBA buildings")
+    logger.log(level=1, msg=f"✓ Loaded {len(buildings)} GBA buildings")
     return buildings
 
 
@@ -203,7 +217,7 @@ def extract_aggregated_particle_size_bins(gdf: gpd.GeoDataFrame):
 
     Standard size bins from sensor: 0.3µm, 0.5µm, 1.0µm, 2.5µm, 5.0µm, 10.0µm
     Particles 0.3µm-1.0µm: Ultrafine (UFP) - health relevant
-    Particles > 2.5µm: PM2.5 equivalent
+    Particles = 2.5µm: PM2.5 equivalent
     """
     particle_cols = [col for col in gdf.columns if "Particles" in col]
 
@@ -225,17 +239,20 @@ def extract_aggregated_particle_size_bins(gdf: gpd.GeoDataFrame):
     result["ultrafine_ufp"] = gdf[
         [c for c in particle_cols if "0.3um" in c or "0.5um" in c or "1.0um" in c]
     ].mean(axis=1, skipna=True)
-    result["pm25_equiv"] = gdf[
-        [c for c in particle_cols if "2.5um" in c or "5.0um" in c or "10.0um" in c]
-    ].mean(axis=1, skipna=True)
+    result["pm25_equiv"] = gdf[[c for c in particle_cols if "2.5um" in c]].mean(
+        axis=1, skipna=True
+    )
 
     return pd.concat([gdf[["geometry"]], result], axis=1)
 
 
 def map_measurements_to_buildings(
-    measurements_gdf, buildings_gdf, max_distance: float = 30.0, k: int = 20
+    measurements_gdf, buildings_gdf, max_distance: float = 200.0, k: int = 20
 ):
     """
+    Note: 200 because of paper
+    300 also option
+
     For each measurement point, find nearest buildings and extract building features.
 
     Args:
@@ -311,7 +328,7 @@ def calculate_urban_morphology_indices(
         buildings_in_buffer = buildings_gdf[buildings_gdf.geometry.intersects(buffer)]
 
         if len(buildings_in_buffer) > 0:
-            # Building density: count per 100m radius
+            # Building density: count per buffer radius
 
             # Building surface fraction: total building area / buffer area
             building_area = buildings_in_buffer.geometry.area.sum()
@@ -383,9 +400,9 @@ def perform_correlation_analysis(measurements_gdf, output_dir="./results/"):
     # Remove rows with NaN in key columns
     analysis_df = measurements_gdf[particle_cols + building_cols].dropna()
 
-    print("\n" + "=" * 70)
-    print("CORRELATION ANALYSIS: AIR POLLUTION vs BUILDING MORPHOLOGY")
-    print("=" * 70)
+    logger.log(level=1, msg="\n" + "=" * 70)
+    logger.log(level=1, msg="CORRELATION ANALYSIS: AIR POLLUTION vs BUILDING MORPHOLOGY")
+    logger.log(level=1, msg="=" * 70)
 
     correlation_matrix = analysis_df.corr()
 
@@ -417,7 +434,7 @@ def perform_correlation_analysis(measurements_gdf, output_dir="./results/"):
                     if p_value < 0.05
                     else "ns"
                 )
-                print(
+                logger.log(level=1, msg=
                     f"{pollutant:20s} vs {morph:30s}: r={r:7.4f}, p={p_value:.4e} {significance}"
                 )
 
@@ -463,6 +480,7 @@ def create_pollution_heatmap(
     """
     import folium
     from folium import plugins
+    from matplotlib.colors import Normalize
 
     # go to lat lon for foloium
     measurements_gdf = measurements_gdf.copy().to_crs(epsg=4326)
@@ -471,7 +489,7 @@ def create_pollution_heatmap(
     valid_data = measurements_gdf[measurements_gdf[pollutant_col].notna()]
 
     if len(valid_data) < 3:
-        print(f"Not enough valid data points for heatmap")
+        logger.log(level=1, msg=f"Not enough valid data points for heatmap")
         return None
 
     # Create base map
@@ -509,7 +527,7 @@ Particles pm25 equivalent : {row["pm25_equiv"]:.1f}<br />
 sky_view factor: {row["svf_ray"]:.2f}<br />
 Mean Building height 20nn {row["mean_20nn_building_height"]:1f}<br />
 mean_building_height_in_buffer: {row["mean_building_height_in_buffer"]:1f}
-</p></html>""")
+</p></html>""", script=True)
 
         folium.CircleMarker(
             location=[row.geometry.y, row.geometry.x],
@@ -521,6 +539,58 @@ mean_building_height_in_buffer: {row["mean_building_height_in_buffer"]:1f}
             fillOpacity=0.7,
             weight=1,
         ).add_to(m)
+
+    # Add contour map for pm2.5 equivalent (toggle with tickmark)
+    # Add contour map for pm2.5 equivalent with toggle control
+    """import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+
+    valid_pm25 = measurements_gdf[measurements_gdf["pm25_equiv"].notna()].copy()
+
+    if len(valid_pm25) > 3:
+        # Create grid for interpolation
+        lon_min, lon_max = valid_pm25.geometry.x.min(), valid_pm25.geometry.x.max()
+        lat_min, lat_max = valid_pm25.geometry.y.min(), valid_pm25.geometry.y.max()
+
+        grid_size = 50
+        lon_grid = np.linspace(lon_min, lon_max, grid_size)
+        lat_grid = np.linspace(lat_min, lat_max, grid_size)
+        LON, LAT = np.meshgrid(lon_grid, lat_grid)
+
+        # Interpolate PM2.5 data
+        points = np.array([valid_pm25.geometry.x, valid_pm25.geometry.y]).T
+        values = valid_pm25["pm25_equiv"].values
+        Z = griddata(points, values, (LON, LAT), method="cubic")
+
+        # Create contour lines and add to map
+        contour_levels = np.nanpercentile(values, np.linspace(0, 100, 10))
+        # Ensure contour levels are strictly increasing and unique
+        contour_levels = np.unique(np.sort(contour_levels))
+
+        import scipy as sp
+        import scipy.ndimage
+        # Use Gaussian filter to smoothen the contour
+        sigma = [5, 5]
+        Z_gauss = sp.ndimage.filters.gaussian_filter(Z, sigma, mode='constant')
+
+        colors = ['blue','royalblue', 'navy','pink',  'mediumpurple',  'darkorchid',  'plum',  'm', 'mediumvioletred', 'palevioletred', 'crimson',
+         'magenta','pink','red','yellow','orange', 'brown','green', 'darkgreen']
+        levels = len(colors)
+
+        contourf = plt.contourf(LON, LAT, Z_gauss, levels, alpha=0.5, colors=colors, linestyles='None', vmin=vmin, vmax=vmax)
+
+        plt.savefig("contourf.jpg")
+        #import geojsoncontour
+
+        # Convert matplotlib contourf to geojson
+        #contour_geojson = geojsoncontour.contourf_to_geojson(
+        #    contourf=contourf,
+        #    min_angle_deg=3.0,
+        #    ndigits=5,
+        #    stroke_width=1,
+        #    fill_opacity=0.1)"""
+        
+
 
     # Add buildings as semi-transparent polygons
     for idx, building in buildings_gdf.iterrows():
@@ -541,11 +611,12 @@ mean_building_height_in_buffer: {row["mean_building_height_in_buffer"]:1f}
             fillColor="gray",
             fillOpacity=opacity,
             weight=1,
-            popup=f"Height: {height:.1f}m",
+            popup=f"Height: {height:.1f}m", # todo: fix popup
         ).add_to(m)
+        
 
     m.save(output_path)
-    print(f"✓ Heatmap saved to {output_path}")
+    logger.log(level=1, msg=f"✓ Heatmap saved to {output_path}")
     return m
 
 
@@ -595,7 +666,7 @@ def create_building_height_pollution_plot(
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"✓ Scatter plots saved to {output_path}")
+    logger.log(level=1, msg=f"✓ Scatter plots saved to {output_path}")
 
 
 def create_svf_vs_pollution_plot(
@@ -673,7 +744,7 @@ def create_svf_vs_pollution_plot(
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"✓ Scatter plots saved to {output_path}")
+    logger.log(level=1, msg=f"✓ Scatter plots saved to {output_path}")
 
 
 def create_density_heatmap_gridded(
@@ -732,7 +803,7 @@ def create_density_heatmap_gridded(
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"✓ Gridded heatmap saved to {output_path}")
+    logger.log(level=1, msg=f"✓ Gridded heatmap saved to {output_path}")
 
 
 # ============================================================================
@@ -775,16 +846,16 @@ def analyze_street_canyons(
 
     canyon_measurements = measurements_gdf[street_canyon_mask]
 
-    print("\n" + "=" * 70)
-    print("STREET CANYON HOTSPOT ANALYSIS")
-    print("=" * 70)
-    print(
+    logger.log(level=1, msg="\n" + "=" * 70)
+    logger.log(level=1, msg="STREET CANYON HOTSPOT ANALYSIS")
+    logger.log(level=1, msg="=" * 70)
+    logger.log(level=1, msg=
         f"High-risk locations (High height + High pollution): {len(canyon_measurements)}"
     )
-    print(
+    logger.log(level=1, msg=
         f"Mean building height in canyons: {canyon_measurements['nearest_building_height'].mean():.1f}m"
     )
-    print(
+    logger.log(level=1, msg=
         f"Mean ultrafine particle concentration: {canyon_measurements['ultrafine_ufp'].mean():.1f} #/0.1L"
     )
 
@@ -851,20 +922,20 @@ def generate_analysis_report(
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    print("\n" + "=" * 70)
-    print("COMPREHENSIVE AIR POLLUTION & URBAN MORPHOLOGY ANALYSIS")
-    print("Wuerzburg Mobile Sensor Campaign - June 2024")
-    print("=" * 70 + "\n")
+    logger.log(level=1, msg="\n" + "=" * 70)
+    logger.log(level=1, msg="COMPREHENSIVE AIR POLLUTION & URBAN MORPHOLOGY ANALYSIS")
+    logger.log(level=1, msg="Wuerzburg Mobile Sensor Campaign - June 2024")
+    logger.log(level=1, msg="=" * 70 + "\n")
 
     # Step 1: Data aggregation
-    print("[1/6] Aggregating particle measurements...")
+    logger.log(level=1, msg="[1/6] Aggregating particle measurements...")
     measurements_gdf = extract_aggregated_particle_size_bins(measurements_gdf)
 
     # Step 2: Spatial matching
-    print("[2/6] Matching measurements to building data...")
+    logger.log(level=1, msg="[2/6] Matching measurements to building data...")
     measurements_gdf = map_measurements_to_buildings(measurements_gdf, buildings_gdf)
 
-    # print("[3.0/6] Preparing SVF for raster"
+    # logger.log(level=1, msg="[3.0/6] Preparing SVF for raster"
     # import rvt
     # import rvt.vis
     # prepare rasterized "DEM"
@@ -879,11 +950,11 @@ def generate_analysis_report(
     # svf_arr = out_dict["svf"]
 
     # Step 3: Urban morphology
-    print("[3/6] Calculating urban morphology indices...")
+    logger.log(level=1, msg="[3/6] Calculating urban morphology indices...")
     measurements_gdf = calculate_urban_morphology_indices(
         measurements_gdf, buildings_gdf, buffer_radius=BUFFER_RADIUS
     )
-    print(f"Saving temp measurements gdf to {output_dir}")
+    logger.log(level=1, msg=f"Saving temp measurements gdf to {output_dir}")
     measurements_gdf.to_file(
         os.path.join(output_dir, "measurements_with_building_features_temp.gpkg")
     )
@@ -891,11 +962,11 @@ def generate_analysis_report(
     # exit("Exiting early")
 
     # Step 4: Statistical analysis
-    print("[4/6] Performing correlation analysis...")
+    logger.log(level=1, msg="[4/6] Performing correlation analysis...")
     results, analysis_df = perform_correlation_analysis(measurements_gdf, output_dir)
 
     # Step 5: Visualizations
-    print("[5/6] Creating visualizations...")
+    logger.log(level=1, msg="[5/6] Creating visualizations...")
     create_building_height_pollution_plot(
         measurements_gdf, os.path.join(output_dir, "building_height_vs_pollution.png")
     )
@@ -914,6 +985,7 @@ def generate_analysis_report(
         "pm25_equiv",
         output_path=os.path.join(output_dir, "pm25_heatmap.png"),
     )
+
     create_pollution_heatmap(
         measurements_gdf,
         buildings_gdf,
@@ -921,22 +993,22 @@ def generate_analysis_report(
     )
 
     # Step 6: Street canyon analysis
-    print("[6/6] Analyzing street canyon effects...")
+    logger.log(level=1, msg="[6/6] Analyzing street canyon effects...")
     canyon_data = analyze_street_canyons(measurements_gdf, buildings_gdf, output_dir)
 
     # Summary statistics
-    print("\n" + "=" * 70)
-    print("SUMMARY STATISTICS")
-    print("=" * 70)
-    print(f"Total measurement points analyzed: {len(measurements_gdf)}")
-    print(
+    logger.log(level=1, msg="\n" + "=" * 70)
+    logger.log(level=1, msg="SUMMARY STATISTICS")
+    logger.log(level=1, msg="=" * 70)
+    logger.log(level=1, msg=f"Total measurement points analyzed: {len(measurements_gdf)}")
+    logger.log(level=1, msg=
         f"Mean nearest building height: {measurements_gdf['nearest_building_height'].mean():.1f}m"
     )
-    print(
+    logger.log(level=1, msg=
         f"Mean ultrafine particle concentration: {measurements_gdf['ultrafine_ufp'].mean():.1f} #/0.1L"
     )
-    print(f"Mean PM2.5 equivalent: {measurements_gdf['pm25_equiv'].mean():.1f} #/0.1L")
-    print(
+    logger.log(level=1, msg=f"Mean PM2.5 equivalent: {measurements_gdf['pm25_equiv'].mean():.1f} #/0.1L")
+    logger.log(level=1, msg=
         f"Building density (buildings/ha): {measurements_gdf['building_density'].mean():.2f}"
     )
 
@@ -944,9 +1016,63 @@ def generate_analysis_report(
     measurements_gdf.to_file(
         os.path.join(output_dir, "measurements_with_building_features.gpkg")
     )
-    print(f"\n✓ Analysis complete. Results saved to {output_dir}/")
+    logger.log(level=1, msg=f"\n✓ Analysis complete. Results saved to {output_dir}/")
 
     return measurements_gdf, buildings_gdf
+
+
+def create_building_statistic(buildings_data: gpd.GeoDataFrame, title:str="Building Count by Height Classification", outdir="./"):
+    # Create building height classification statistics
+    building_classifications = {
+        "Low Rise (< 9m)": buildings_data[buildings_data["height_calc"] < 9],
+        "Multi-Story (9-21m)": buildings_data[(buildings_data["height_calc"] >= 9) & (buildings_data["height_calc"] < 21)],
+        "Mid Rise (21-30m)": buildings_data[(buildings_data["height_calc"] >= 21) & (buildings_data["height_calc"] < 30)],
+        "High Rise (30-100m)": buildings_data[(buildings_data["height_calc"] >= 30) & (buildings_data["height_calc"] < 100)],
+        "Ultra High Rise (> 100m)": buildings_data[buildings_data["height_calc"] >= 100],
+    }
+
+    # Create statistics table
+    total_buildings = len(buildings_data)
+    building_stats = []
+
+    for classification, buildings_subset in building_classifications.items():
+        count = len(buildings_subset)
+        percentage = (count / total_buildings * 100) if total_buildings > 0 else 0
+        building_stats.append({
+            "Building Type": classification,
+            "Count": count,
+            "Percentage": f"{percentage:.2f}%",
+            "Mean Height (m)": f"{buildings_subset['height_calc'].mean():.2f}" if len(buildings_subset) > 0 else "N/A",
+        })
+
+    building_stats_df = pd.DataFrame(building_stats)
+
+    #logger.log(level=1, msg="\n" + "=" * 70)
+    #logger.log(level=1, msg="BUILDING HEIGHT CLASSIFICATION STATISTICS")
+    #logger.log(level=1, msg="=" * 70)
+    #logger.log(level=1, msg=f"\n{building_stats_df.to_string(index=False)}\n")
+
+    # Save statistics table
+    #building_stats_df.to_csv(os.path.join(outdir, "building_height_statistics.csv"), index=False)
+    #logger.log(level=1, msg=f"✓ Building statistics saved to {outdir}/building_height_statistics.csv")
+
+    # Create visualization
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    # Bar chart of building counts
+    bars = ax.bar(range(len(building_stats_df)), building_stats_df['Count'].astype(int), color="steelblue")
+    ax.bar_label(bars)
+    ax.set_xticks(range(len(building_stats_df)))
+    ax.set_xticklabels(building_stats_df['Building Type'], rotation=45, ha="right")
+    ax.set_ylabel("Number of Buildings")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "building_height_classification.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+    logger.log(level=1, msg=f"✓ Building classification visualization saved to {outdir}/building_height_classification.png")
+
 
 
 # ============================================================================
@@ -954,20 +1080,33 @@ def generate_analysis_report(
 # ============================================================================
 
 if __name__ == "__main__":
+    import sys
+
     # svf physics based ray length
     RAY_LENGTH = 100
 
     # buffer radius defines area for spatial metrics except svf ray
-    BUFFER_RADIUS = 50
+    BUFFER_RADIUS = 200  # because of paper
 
     utm_epsg = 32632  # important to convert to non 43- projection
 
-    sensor_position = "particleBottom"
+    sensor_position = "particleFront"
+
+    time_of_day = "Vormittag"
+
+    # make results dir
+    outdir = f"./results/{sensor_position}/{time_of_day}"
+    os.makedirs(outdir, exist_ok=True)
+
+    file_handler = logging.FileHandler(outdir + "/" + "log.log", mode="a", encoding="utf-8") 
+    logger.addHandler(file_handler)
+
 
     # Load data
     measurements = load_particle_measurements(
         data_dir="./data/standardized_withNA",
         sensor_position=sensor_position,
+        time_of_day=[time_of_day],
         epsg=utm_epsg,
     )
 
@@ -976,10 +1115,24 @@ if __name__ == "__main__":
 
     # loads gba buildings
     buildings = load_GBA_buildings(epsg=utm_epsg)
-    # print(buildings)
-    # print(buildings.columns)
 
     # Run analysis
     analyzed_data, buildings_data = generate_analysis_report(
-        measurements, buildings, output_dir=f"./results/{sensor_position}/"
+        measurements, buildings, output_dir=outdir
     )
+
+    # create svf, building statistics
+    create_building_statistic(
+        buildings, outdir=outdir
+    )
+
+    # Create boxplot for sky view factor
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.boxplot(analyzed_data["svf_ray"].dropna(), vert=True)
+    ax.set_ylabel("Sky View Factor (SVF)")
+    ax.set_title("Distribution of Sky View Factor (Ray Tracing)")
+    ax.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "svf_ray_boxplot.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+    logger.log(level=1, msg=f"✓ SVF boxplot saved to {outdir}/svf_ray_boxplot.png")
